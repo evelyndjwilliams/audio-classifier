@@ -1,5 +1,7 @@
+from cProfile import label
 import torch
 import torch.nn as nn
+from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import librosa
 import librosa.display
@@ -9,11 +11,8 @@ import torchaudio
 import numpy as np
 import argparse
 import shutil
-
-
-
-# def gen_model(input_dims):
-
+import pandas as pd
+from torchsummary import summary
 
 class LSTM(nn.Module):
     """ Defines architecture and training procedure for model.
@@ -21,25 +20,39 @@ class LSTM(nn.Module):
 
     def __init__(self):
         """Model architecture"""
-        self.model = self.generate_model(input_size)
-        self.forward = self.model.forward()
+        super().__init__()
+        # self.forward = self.model.forward()
+        self.lstm = nn.LSTM(input_size=128, hidden_size=128, num_layers=1, batch_first=True)
+        # make sure batch is first dimension in input tensor, or change this
+        self.linear1 = nn.Linear(128,128)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.25)
+        self.linear2 = nn.Linear(128,3)
+        self.softmax = nn.Softmax(dim=1)
 
-    def generate_model(input_size):
-        return nn.Sequential(
-            nn.LSTM(input_size=input_size, hidden_size=128, num_layers=1, batch_first=True), # make sure batch is first dimension in input tensor, or change this
-            nn.Linear(128,128),
-            nn.ReLU(),
-            nn.Dropout(0.25),
-            nn.Linear(128,3),
-            nn.Softmax()
-            )
+
+    def forward(self, input_data):
+        print(input_data.size())
+        x = self.lstm(input_data)
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+        x = self.linear2(x)
+        predictions = self.softmax(x)
+        return predictions
+
+
 
 
 class Preprocessor():
+    """ Extracts scaled log mel-spectrograms from audio dataset.
+        Stores in /preprocessed-data 
+        To run preprocessing, pass --preprocess arg to train.py"""
 
     def __init__(self):
         # self.__init__()
         self.transform = torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_fft=2048, hop_length=265, n_mels=128)
+        self.labels = {'speech':0, 'rap':1, 'singing':2}
 
     def preprocess(self, filename):
         # wav, sr = librosa.load(fn, sr=16000)
@@ -56,27 +69,44 @@ class Preprocessor():
         # plt.show()
         return torch.Tensor(scaled_log_ms)
 
-    def preprocess_dir(self, in_dir, out_dir):
+    def preprocess_dir(self, in_dir, out_dir, info_file):
         if  os.path.exists(out_dir):
             shutil.rmtree(out_dir)
         os.mkdir(out_dir)
-        for genre in os.listdir(in_dir):
-            if genre.startswith('.'):
-                continue
-            genre_dir = os.path.join(in_dir, genre)
-            # if not os.path.exists(os.path.join(out_dir, genre)):
-            os.mkdir(os.path.join(out_dir, genre))
-            for person in os.listdir(genre_dir):
-                person_dir = os.path.join(genre_dir, person)
-                for file in os.listdir(person_dir):
-                    if file.startswith('.'):
-                        continue
-                    if file[-4:] == '.wav':
-                        file_path = os.path.join(person_dir, file)
-                        log_melspec = self.preprocess(file_path)
-                        out_name = os.path.join(out_dir, genre, f"{file[:-4]}.pt")
-                        print(out_name)
-                        torch.save(log_melspec, out_name)
+        with open(info_file, 'w+') as f:
+            for genre in os.listdir(in_dir):
+                if genre.startswith('.'):
+                    continue
+                genre_dir = os.path.join(in_dir, genre)
+                # if not os.path.exists(os.path.join(out_dir, genre)):
+                os.mkdir(os.path.join(out_dir, genre))
+                for person in os.listdir(genre_dir):
+                    person_dir = os.path.join(genre_dir, person)
+                    for file in os.listdir(person_dir):
+                        if file.startswith('.'):
+                            continue
+                        if file[-4:] == '.wav':
+                            file_path = os.path.join(person_dir, file)
+                            log_melspec = self.preprocess(file_path)
+                            out_name = os.path.join(out_dir, genre, f"{file[:-4]}.pt")
+                            print(out_name)
+                            torch.save(log_melspec, out_name)
+                            f.write(f"{out_name},{genre},{self.labels[genre]}\n")
+
+class AudioDataset(Dataset):
+
+    def __init__(self, label_file, data_dir):
+        self.data_info = pd.read_csv(label_file)
+        self.data_dir = data_dir
+
+    def get_dataset_len(self):
+        return len(self.data_info)
+
+    def __getitem__(self, index):
+        data_path =  self.data_info.iloc[index, 0]
+        mel_spec = torch.load(data_path)
+        label = self.data_info.iloc[index, 2]
+        return mel_spec, label
 
 if __name__ == "__main__":
     # args: store_true, if preprocess = True: run preprocesing, else just run training
@@ -84,11 +114,37 @@ if __name__ == "__main__":
     parser.add_argument('--preprocess', action='store_true')
     args = parser.parse_args()
 
+    DATA_DIR = 'preprocessed_data'
+    INFO_FILE = os.path.join(DATA_DIR, 'data_info.csv')
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     if args.preprocess == True:
         data_preprocessor = Preprocessor()
-        data_preprocessor.preprocess_dir("ML_exercice/data", "ML_exercice/preprocessed_data/")
-    # preprocess_dir(in_dir = )
-    # SR = 16000
-    # m
-# preprocessing data
+        data_preprocessor.preprocess_dir("data", DATA_DIR, INFO_FILE)
 
+
+    
+    data = AudioDataset(INFO_FILE, DATA_DIR)
+    print(f"there are {data.get_dataset_len()} samples in the dataset")
+
+    signal, label = data[0]
+    print(signal.size())
+
+    lstm = LSTM().to(DEVICE)
+    print(summary(lstm, (1, 182, 128)))
+
+# make dataloader
+# store data with label
+# randomise shuffle and split data : 10% val, 10% test
+# shuffle labels and data same way
+
+
+
+# loss function
+
+# multiclass cross-entropy https://machinelearningmastery.com/how-to-choose-loss-functions-when-training-deep-learning-neural-networks/
+
+# y = one-hot
+# y' = vector of softmaxed outputs
+# one hot encode output variable
+# y = to_categorical(y)  KERAS
