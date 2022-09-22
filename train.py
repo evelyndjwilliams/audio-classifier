@@ -2,6 +2,7 @@ from cProfile import label
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import librosa
 import librosa.display
@@ -32,16 +33,18 @@ class LSTM(nn.Module):
 
 
     def forward(self, input_data):
-        print(input_data.size())
+        # print(input_data.size())
         x = self.lstm(input_data)
-        x = self.linear1(x)
+        # print(x[1][0].size())
+        # this is using final hidden state (not cell state) as input to linear
+        # as here https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html?highlight=lstm#torch.nn.LSTM
+        x = self.linear1(x[1][0])
+        # print(x.size())
         x = self.relu(x)
         x = self.dropout(x)
         x = self.linear2(x)
         predictions = self.softmax(x)
         return predictions
-
-
 
 
 class Preprocessor():
@@ -109,7 +112,6 @@ class AudioDataset(Dataset):
         return mel_spec, label
 
 if __name__ == "__main__":
-    # args: store_true, if preprocess = True: run preprocesing, else just run training
     parser = argparse.ArgumentParser(description='Audio classifier')
     parser.add_argument('--preprocess', action='store_true')
     args = parser.parse_args()
@@ -122,16 +124,16 @@ if __name__ == "__main__":
         data_preprocessor = Preprocessor()
         data_preprocessor.preprocess_dir("data", DATA_DIR, INFO_FILE)
 
-
-    
     data = AudioDataset(INFO_FILE, DATA_DIR)
-    print(f"there are {data.get_dataset_len()} samples in the dataset")
+    # print(f"there are {data.get_dataset_len()} samples in the dataset")
 
     signal, label = data[0]
-    print(signal.size())
+    # print(signal.size())
 
-    lstm = LSTM().to(DEVICE)
-    print(summary(lstm, (1, 182, 128)))
+    lstm = LSTM()
+    predictions = lstm(signal.transpose(0,1))
+    print(predictions)
+    
 
 # make dataloader
 # store data with label
