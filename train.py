@@ -1,8 +1,10 @@
-from cProfile import label
 import torch
 import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
+from torch.utils.data import Dataset, Subset, DataLoader, random_split
+from torch.utils.data.sampler import SubsetRandomSampler
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import librosa
 import librosa.display
@@ -13,140 +15,155 @@ import numpy as np
 import argparse
 import shutil
 import pandas as pd
-from torchsummary import summary
+from lstm import LSTM
+from lstm import AudioDataset
+from sklearn.preprocessing import OneHotEncoder
+from livelossplot import PlotLosses
+import numpy as np
+import gc
 
-class LSTM(nn.Module):
-    """ Defines architecture and training procedure for model.
-        Model is a 1-layer LSTM with 128 hidden units."""
+def train_single_epoch(model, data_loader, loss_fn, optimiser, device, mode):
+    onehot_encoder = OneHotEncoder(sparse=False)
+    # labels = [[1],[2],[3]]
+    # onehot_encoder.fit(labels)  
+    running_loss = 0.0
+    batch = 0
+    for input, target in data_loader:
+        one_hot = np.zeros((target.size()[0], 3))
+        rows = np.arange(len(target))
+        one_hot[rows, target] = 1
+        input, target = input.to(device), torch.Tensor(one_hot).to(device)#.unsqueeze(0).transpose(0,1)
+        prediction = model(input).transpose(0,1)
+        loss = loss_fn(prediction.squeeze(1), target)
+        if mode == 'eval':
+            print(loss)
+            optimiser.step()  
+            scheduler.step(loss.item())
+        running_loss += loss.item()
+        batch +=1
+        if mode == 'train':
+            optimiser.zero_grad()
+            loss.backward()
+            gc.collect()
 
-    def __init__(self):
-        """Model architecture"""
-        super().__init__()
-        # self.forward = self.model.forward()
-        self.lstm = nn.LSTM(input_size=128, hidden_size=128, num_layers=1, batch_first=True)
-        # make sure batch is first dimension in input tensor, or change this
-        self.linear1 = nn.Linear(128,128)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.25)
-        self.linear2 = nn.Linear(128,3)
-        self.softmax = nn.Softmax(dim=1)
-
-
-    def forward(self, input_data):
-        # print(input_data.size())
-        x = self.lstm(input_data)
-        # print(x[1][0].size())
-        # this is using final hidden state (not cell state) as input to linear
-        # as here https://pytorch.org/docs/stable/generated/torch.nn.LSTM.html?highlight=lstm#torch.nn.LSTM
-        x = self.linear1(x[1][0])
-        # print(x.size())
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.linear2(x)
-        predictions = self.softmax(x)
-        return predictions
+    print(f"loss: {loss.item()}")
+    print(f'avg {mode} loss = {running_loss/batch}')
+    return running_loss/batch
 
 
-class Preprocessor():
-    """ Extracts scaled log mel-spectrograms from audio dataset.
-        Stores in /preprocessed-data 
-        To run preprocessing, pass --preprocess arg to train.py"""
+def train(model, train_loader, val_loader, loss_fn, optimiser, device, epochs):
+    train_losses = []
+    val_losses = []
+    for i in range(epochs):
+        # logs = {}
+        model.train()
+        print(f"Epoch {i+1}")
+        train_loss = train_single_epoch(model, train_loader, loss_fn, optimiser, device, 'train')
+        train_losses.append(train_loss)
+        model.eval()
+        val_loss = train_single_epoch(model, val_loader, loss_fn, optimiser, device, 'eval')
+        val_losses.append(val_loss)
+        print("---------------------------")
+        plt.plot(train_losses, linestyle = 'dotted', label='train')
+        
 
-    def __init__(self):
-        # self.__init__()
-        self.transform = torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_fft=2048, hop_length=265, n_mels=128)
-        self.labels = {'speech':0, 'rap':1, 'singing':2}
+        # plt.plot(x1, y1, label = "line 1")
+        # line 2 points
+        # x2 = [10,20,30]
+        # y2 = [40,10,30]
+        # plotting the line 2 points 
+        plt.plot(val_losses, linestyle = 'dotted', label = "val")
+        plt.xlabel('Epoch')
+        # Set the y axis label of the current axis.
+        plt.ylabel('Cross Entropy Loss')
+        # Set a title of the current axes.
+        plt.title('Cross Entropy Loss computed on audio training and validation sets.')
+        # show a legend on the plot
+        if i == 0:
+            plt.legend()
+        plt.savefig('training curve.png')
 
-    def preprocess(self, filename):
-        # wav, sr = librosa.load(fn, sr=16000)
-        # wav = librosa.effects.preemphasis(wav) # pre-emphasis is messing up singing spectrograms - huge blown-out high frequencies
-        wav, sr = torchaudio.load(filename, normalize=True)
-        # transform = torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_fft=2048, hop_length=265, n_mels=128)
-        ms = self.transform(wav)
-        log_ms = librosa.amplitude_to_db(ms.squeeze(0))
-        mm_scaler = MinMaxScaler()
-        mm_scaler.fit(log_ms)#.squeeze(0))
-        scaled_log_ms = mm_scaler.transform(log_ms)#.squeeze(0))
-        # plt.imshow(scaled_log_ms, aspect='auto')
-        # plt.gca().invert_yaxis()
-        # plt.show()
-        return torch.Tensor(scaled_log_ms)
-
-    def preprocess_dir(self, in_dir, out_dir, info_file):
-        if  os.path.exists(out_dir):
-            shutil.rmtree(out_dir)
-        os.mkdir(out_dir)
-        with open(info_file, 'w+') as f:
-            for genre in os.listdir(in_dir):
-                if genre.startswith('.'):
-                    continue
-                genre_dir = os.path.join(in_dir, genre)
-                # if not os.path.exists(os.path.join(out_dir, genre)):
-                os.mkdir(os.path.join(out_dir, genre))
-                for person in os.listdir(genre_dir):
-                    person_dir = os.path.join(genre_dir, person)
-                    for file in os.listdir(person_dir):
-                        if file.startswith('.'):
-                            continue
-                        if file[-4:] == '.wav':
-                            file_path = os.path.join(person_dir, file)
-                            log_melspec = self.preprocess(file_path)
-                            out_name = os.path.join(out_dir, genre, f"{file[:-4]}.pt")
-                            print(out_name)
-                            torch.save(log_melspec, out_name)
-                            f.write(f"{out_name},{genre},{self.labels[genre]}\n")
-
-class AudioDataset(Dataset):
-
-    def __init__(self, label_file, data_dir):
-        self.data_info = pd.read_csv(label_file)
-        self.data_dir = data_dir
-
-    def get_dataset_len(self):
-        return len(self.data_info)
-
-    def __getitem__(self, index):
-        data_path =  self.data_info.iloc[index, 0]
-        mel_spec = torch.load(data_path)
-        label = self.data_info.iloc[index, 2]
-        return mel_spec, label
+    print("Finished training")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Audio classifier')
-    parser.add_argument('--preprocess', action='store_true')
-    args = parser.parse_args()
-
+    SAMPLE_RATE = 16000
+    BATCH_SIZE = 32
+    EPOCHS = 100
+    LR = 0.001
+    
     DATA_DIR = 'preprocessed_data'
     INFO_FILE = os.path.join(DATA_DIR, 'data_info.csv')
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    if args.preprocess == True:
-        data_preprocessor = Preprocessor()
-        data_preprocessor.preprocess_dir("data", DATA_DIR, INFO_FILE)
-
-    data = AudioDataset(INFO_FILE, DATA_DIR)
-    # print(f"there are {data.get_dataset_len()} samples in the dataset")
-
-    signal, label = data[0]
-    # print(signal.size())
-
-    lstm = LSTM()
-    predictions = lstm(signal.transpose(0,1))
-    print(predictions)
+    LOSS_FN = nn.CrossEntropyLoss()
     
 
-# make dataloader
-# store data with label
-# randomise shuffle and split data : 10% val, 10% test
+    data = AudioDataset(INFO_FILE, DATA_DIR)    
+    val_amount = 0.1
+    test_amount = 0.1
+    dataset_size = len(data)
+    indices = list(range(dataset_size))
+    val_split = int(np.floor(val_amount * dataset_size))
+    test_split = val_split + int(np.floor(test_amount * dataset_size))
+    shuffle_dataset = True
+    random_seed = 42
+    if shuffle_dataset :
+        np.random.seed(random_seed)
+        np.random.shuffle(indices)
+    # print(indices)
+    train_indices, val_indices, test_indices = indices[test_split:], indices[:val_split], indices[val_split:test_split]
+    print(val_indices)
+    """Creating Torch data samplers and loaders:"""
+    train_sampler = SubsetRandomSampler(train_indices)
+    val_sampler = SubsetRandomSampler(val_indices)
+    train_loader = DataLoader(data,
+                                    batch_size=BATCH_SIZE,
+                                    sampler=train_sampler)
+    val_loader = DataLoader(data,
+                                    batch_size=len(val_indices),
+                                    sampler=val_sampler)
+    val_set = Subset(data, val_indices)
+    loader = DataLoader(data, batch_size=BATCH_SIZE)
+
+    # construct model and assign it to device
+    lstm = LSTM()
+    # print(lstm)
+    # optimiser = torch.optim.Adam(lstm.parameters(),lr=LR)
+    optimiser = optim.SGD(lstm.parameters(), lr=LR, momentum=0.9)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser)
+    # predictions = lstm(signal.transpose(0,1))
+    # print(predictions)
+
+    # initialise loss funtion + optimiser
+
+    # train model
+    
+    
+    train(lstm, train_loader, val_loader, LOSS_FN, optimiser, DEVICE, EPOCHS)
+    # train(lstm, val_loader, LOSS_FN, optimiser, DEVICE, EPOCHS, 'eval')
+
+    # save model
+    torch.save(lstm.state_dict(), "lstm.pth")
+    print("Trained lstm saved at lstm.pth")
+
+
+# TO DO
+
+# TRAINING SETS
+# randomise shuffle and split data : 80% train, 10% val, 10% test
 # shuffle labels and data same way
 
+# PLOTTING
+# plot valation loss curve
+
+# TRAINING METHOD
+# set scheduler / annealing --> test
+# set scheduler to step() using val loss
+# set adaptive LR
+#
+# TRY CNN
+# if CEL still bad --> look at loss : softmax, or 
+
+# TRY MFCCs + deltas
 
 
-# loss function
 
-# multiclass cross-entropy https://machinelearningmastery.com/how-to-choose-loss-functions-when-training-deep-learning-neural-networks/
-
-# y = one-hot
-# y' = vector of softmaxed outputs
-# one hot encode output variable
-# y = to_categorical(y)  KERAS
