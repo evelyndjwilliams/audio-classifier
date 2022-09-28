@@ -21,6 +21,8 @@ import numpy as np
 import gc
 from train import AudioDataset
 from torchmetrics import ConfusionMatrix
+from sklearn.metrics import confusion_matrix
+import seaborn as sn
 # import train 
 
 def predict(model, data_loader, loss_fn, device, mode):
@@ -49,8 +51,19 @@ def predict(model, data_loader, loss_fn, device, mode):
 
     target = torch.tensor(true_classes)
     preds = torch.tensor(predicted_classes)
-    confmat = ConfusionMatrix(num_classes=3)
-    print(confmat(preds, target))
+    # confmat = ConfusionMatrix(num_classes=3)
+    cm = confusion_matrix(preds, target)
+    # cm = cm / cm.astype(np.float).sum(axis=1)
+    print(cm)
+    # classes = 
+    classes = ['Speech', 'Rap', 'Singing']
+    # (y_true, y_pred)
+    df_cm = pd.DataFrame(cm, index = [i for i in classes],
+                        columns = [i for i in classes])
+    plt.figure(figsize = (12,7))
+    sn.heatmap(df_cm, annot=True)
+    plt.savefig('output.png')
+    plt.matshow()
     return running_loss/batch
 
 if __name__ == "__main__":
