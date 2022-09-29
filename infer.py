@@ -42,11 +42,11 @@ def predict(model, data_loader, loss_fn, device, mode):
             one_hot[rows, label] = 1
             target = torch.Tensor(one_hot).to(device).squeeze(0)
             prediction = model(input).to(device)
-            o.write(f'{label},{torch.argmax(prediction, dim=1)}\n')
-            predicted_classes.extend(torch.argmax(prediction, dim=1).tolist())
             loss = loss_fn(prediction, target)
             running_loss += loss.item()
             batch +=1
+            predicted_classes.extend(torch.argmax(prediction, dim=1).tolist())
+            o.write(f'{label},{torch.argmax(prediction, dim=1)}\n')
             f_paths.extend(f_path)
 
         print(f'avg {mode} loss = {running_loss/batch}')
