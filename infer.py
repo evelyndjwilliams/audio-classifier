@@ -23,6 +23,7 @@ from train import AudioDataset
 from torchmetrics import ConfusionMatrix
 from sklearn.metrics import confusion_matrix
 import seaborn as sn
+from sklearn.metrics import f1_score
 # import train 
 
 def predict(model, data_loader, loss_fn, device, mode):
@@ -30,40 +31,49 @@ def predict(model, data_loader, loss_fn, device, mode):
     batch = 0
     true_classes = []
     predicted_classes = []
+    f_paths = []
     with open('predictions.csv', 'w+') as o:
-        for input, label in data_loader:
+        for input, label, f_path in data_loader:
             true_classes.extend(label.tolist())
             one_hot = np.zeros((label.size()[0], 3))
             rows = np.arange(len(label))
             one_hot[rows, label] = 1
             target = torch.Tensor(one_hot).to(device).squeeze(0)
             prediction = model(input).to(device)
-            print(prediction)
             o.write(f'{label},{torch.argmax(prediction, dim=1)}\n')
             predicted_classes.extend(torch.argmax(prediction, dim=1).tolist())
             loss = loss_fn(prediction, target)
             running_loss += loss.item()
             batch +=1
+            f_paths.extend(f_path)
         print(f'avg {mode} loss = {running_loss/batch}')
-    print(true_classes)#to_list())
-    print(predicted_classes)#.to_list())
-    # for i in
 
     target = torch.tensor(true_classes)
     preds = torch.tensor(predicted_classes)
-    # confmat = ConfusionMatrix(num_classes=3)
-    cm = confusion_matrix(preds, target)
-    # cm = cm / cm.astype(np.float).sum(axis=1)
-    print(cm)
-    # classes = 
-    classes = ['Speech', 'Rap', 'Singing']
-    # (y_true, y_pred)
-    df_cm = pd.DataFrame(cm, index = [i for i in classes],
-                        columns = [i for i in classes])
-    plt.figure(figsize = (12,7))
-    sn.heatmap(df_cm, annot=True)
-    plt.savefig('output.png')
-    plt.matshow()
+
+    """Save wrong-labelled file paths"""
+    with open('Incorrect label predictions.txt', 'w+') as o:
+        for i, label in enumerate(target):
+            if label != preds[i]:
+                o.write(f_paths[i])
+
+    with open('stats.txt', 'w+') as o:
+        """Confusion matrix"""
+        cm = confusion_matrix(target, preds)
+        o.write(f'confusion matrix: {cm}\n')
+        classes = ['Speech', 'Rap', 'Singing']
+        df_cm = pd.DataFrame(cm, index = [i for i in classes],
+                            columns = [i for i in classes])
+        sn.heatmap(df_cm, annot=True)
+        plt.xlabel('Predicted label', fontsize=12)
+        plt.ylabel('True label', fontsize=12)
+        plt.savefig('output.png')
+
+        """F1 score"""
+        o.write("f1 scores")
+        o.write(f"{classes}\n")
+        o.write(f'{f1_score(target, preds, average=None)}\n')
+
     return running_loss/batch
 
 if __name__ == "__main__":

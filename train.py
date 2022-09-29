@@ -17,32 +17,26 @@ import shutil
 import pandas as pd
 from lstm import LSTM
 from cnn import CNN
-from sklearn.preprocessing import OneHotEncoder
 import numpy as np
 import gc
 
 def train_single_epoch(model, data_loader, loss_fn, optimiser, device, mode):
-    onehot_encoder = OneHotEncoder(sparse=False)
     running_loss = 0.0
     batch = 0
-    for input, target in data_loader:
+    for input, target, f_path in data_loader:
         optimiser.zero_grad()
         one_hot = np.zeros((target.size()[0], 3))
         rows = np.arange(len(target))
         one_hot[rows, target] = 1
-        target = one_hot
         target = torch.Tensor(target).to(device).squeeze(0)
         prediction = model(input).to(device)
-        # print(f'prediction size: {prediction.size()}, target size: {target.size()}')
         loss = loss_fn(prediction, target)
-        # print(loss.item())
         running_loss += loss.item()
         if mode == 'train':
             loss.backward()
             optimiser.step() 
             gc.collect()
         batch +=1
-    # print(f"loss: {loss.item()}")
     print(f'avg {mode} loss = {running_loss/batch}')
     return running_loss/batch
 
@@ -65,14 +59,16 @@ def train(model, train_loader, val_loader, loss_fn, optimiser, device, epochs, l
             best_val_loss = val_loss
         val_losses.append(val_loss)
         """Update and save training curves"""
-        plt.plot(train_losses, linestyle = 'dotted', label='train', color='green')
-        plt.plot(val_losses, linestyle = 'dotted', label = "val", color='orange')
+        xi = [i + 1 for i in list(range(len(val_losses)))]
+        plt.plot(xi, train_losses,  label='train', color='green')
+        plt.plot(xi, val_losses,  label = "val", color='orange')
         plt.xlabel('Epoch')
+        # plt.xticks(xi)
         plt.ylabel('Cross Entropy Loss')
         plt.title('Cross Entropy Loss computed on audio training and validation sets.')
         if i == 0:
             plt.legend()
-        plt.savefig(f'cnn training curve no dropout.png')
+        plt.savefig(f'0.01 0.95 cnn training curve 20 dropout.png')
         with open(log_file, 'a') as o:
             o.write(f'Epoch {i+1}\n Train loss: {train_loss} \n Val loss: {val_loss}\n')
         scheduler.step()
@@ -126,14 +122,21 @@ class AudioDataset(Dataset):
         self.data_info = pd.read_csv(label_file)
         self.data_dir = data_dir
 
+    def get_path(self, index):
+        return self.data_info.iloc[index, 0]
+
     def __len__(self):
         return len(self.data_info)
 
     def __getitem__(self, index):
+        
         data_path =  self.data_info.iloc[index, 0]
+        # print()
+        # print(self.data_info.iloc[index, :])
+        # print(data_path)
         mel_spec = torch.load(data_path)
         label = self.data_info.iloc[index, 2]
-        return mel_spec, label
+        return mel_spec, label, data_path
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Audio classifier')
@@ -147,7 +150,7 @@ if __name__ == "__main__":
     SAMPLE_RATE = 16000
     BATCH_SIZE = 24
     EPOCHS = 100
-    LR = 0.1
+    LR = 0.05
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     LOSS_FN = nn.CrossEntropyLoss()
 
@@ -170,7 +173,6 @@ if __name__ == "__main__":
     indices = list(range(dataset_size))
     val_split = int(np.floor(val_amount * dataset_size))
     test_split = val_split + int(np.floor(test_amount * dataset_size))
-
     random_seed = 42
     np.random.seed(random_seed)
     np.random.shuffle(indices)
@@ -209,28 +211,24 @@ if __name__ == "__main__":
         model_name = 'cnn'
 
     optimiser = optim.SGD(model.parameters(), LR)
-    scheduler = optim.lr_scheduler.ExponentialLR(optimiser, gamma=0.95)
+    scheduler = optim.lr_scheduler.ExponentialLR(optimiser, gamma=0.9)
     train(model, train_loader, val_loader, LOSS_FN, optimiser, DEVICE, EPOCHS, f'{model_name}_log.txt')
     torch.save(model.state_dict(), f"{model_name}.pth")
     print(f"Trained {model_name} saved at {model_name}.pth")
 
 
-# TO DO
-
-# URGENT 
-# backup to gh
-
-# TRAINING METHOD
-# hypterparameter tuning: reduce LR : (0.1, 0.05, 0.01)
-# change gamma lav for scheduler
-# if val loss is bouncing around : reduce LR
-# TRY CNN
-# compare dropout / no dropout (backup loss curves to compare)
-
-# CODE REFACTORING
 # move hyperparams to dict file
 # comment for readability
 # exclude all LSTM stuff - just check it runs
 
+# RESULTS
+# confusion matrix - save target and argmax(model(output)) to file
+#   categorise by true label
+#   make into matrix
+#  scores:
+    # read paper on evaluating multiclass classifier (in notes app)
+# look at ones which are wrong
 
-
+# VISUALISATIONS
+# generate 3 characteristic mel-spectrograms
+# visualise all 64 feature maps for a sample: are any interesting?
