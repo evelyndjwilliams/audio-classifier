@@ -17,7 +17,7 @@ class CNN(nn.Module):
         self.linear2 = nn.Linear(500,3)
         # self.linear3 = nn.Linear(64, 32)
         # self.linear4 = nn.Linear(32,3)
-        self.dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(0.20)
 
     def forward(self, input_data):
         """Training order"""

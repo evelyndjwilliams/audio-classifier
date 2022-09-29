@@ -63,7 +63,6 @@ def train(model, train_loader, val_loader, loss_fn, optimiser, device, epochs, l
         plt.plot(xi, train_losses,  label='train', color='green')
         plt.plot(xi, val_losses,  label = "val", color='orange')
         plt.xlabel('Epoch')
-        # plt.xticks(xi)
         plt.ylabel('Cross Entropy Loss')
         plt.title('Cross Entropy Loss computed on audio training and validation sets.')
         if i == 0:
@@ -112,7 +111,6 @@ class Preprocessor():
                             file_path = os.path.join(person_dir, file)
                             log_melspec = self.preprocess(file_path)
                             out_name = os.path.join(out_dir, genre, f"{file[:-4]}.pt")
-                            print(out_name)
                             torch.save(log_melspec.transpose(0,1), out_name)
                             f.write(f"{out_name},{genre},{self.labels[genre]}\n")
 
@@ -131,9 +129,6 @@ class AudioDataset(Dataset):
     def __getitem__(self, index):
         
         data_path =  self.data_info.iloc[index, 0]
-        # print()
-        # print(self.data_info.iloc[index, :])
-        # print(data_path)
         mel_spec = torch.load(data_path)
         label = self.data_info.iloc[index, 2]
         return mel_spec, label, data_path
@@ -216,19 +211,3 @@ if __name__ == "__main__":
     torch.save(model.state_dict(), f"{model_name}.pth")
     print(f"Trained {model_name} saved at {model_name}.pth")
 
-
-# move hyperparams to dict file
-# comment for readability
-# exclude all LSTM stuff - just check it runs
-
-# RESULTS
-# confusion matrix - save target and argmax(model(output)) to file
-#   categorise by true label
-#   make into matrix
-#  scores:
-    # read paper on evaluating multiclass classifier (in notes app)
-# look at ones which are wrong
-
-# VISUALISATIONS
-# generate 3 characteristic mel-spectrograms
-# visualise all 64 feature maps for a sample: are any interesting?
